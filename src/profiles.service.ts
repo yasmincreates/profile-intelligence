@@ -1,6 +1,21 @@
 import axios from "axios";
-import { v7 as uuidv7 } from "uuid";
+import { randomBytes } from "crypto";
 import db from "./db";
+
+function uuidv7(): string {
+  const now = Date.now();
+  const buf = randomBytes(16);
+  buf[0] = (now / 2 ** 40) & 0xff;
+  buf[1] = (now / 2 ** 32) & 0xff;
+  buf[2] = (now / 2 ** 24) & 0xff;
+  buf[3] = (now / 2 ** 16) & 0xff;
+  buf[4] = (now / 2 **  8) & 0xff;
+  buf[5] =  now             & 0xff;
+  buf[6] = (buf[6] & 0x0f) | 0x70; // version 7
+  buf[8] = (buf[8] & 0x3f) | 0x80; // variant 10xx
+  const h = buf.toString("hex");
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
 
 function getAgeGroup(age: number): string {
   if (age <= 12) return "child";
