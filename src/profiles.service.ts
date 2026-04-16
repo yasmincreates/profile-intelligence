@@ -9,13 +9,22 @@ function getAgeGroup(age: number): string {
   return "senior";
 }
 
+function formatProfile(profile: any) {
+  return {
+    ...profile,
+    created_at: profile.created_at instanceof Date
+      ? profile.created_at.toISOString().replace(/\.\d{3}Z$/, "Z")
+      : profile.created_at,
+  };
+}
+
 export async function enrichAndStore(name: string) {
   // Check if profile already exists
   const existing = await db.profile.findUnique({
     where: { name: name.toLowerCase() },
   });
   if (existing) {
-    return { alreadyExists: true, data: existing };
+    return { alreadyExists: true, data: formatProfile(existing) };
   }
 
   // Call all 3 APIs in parallel
@@ -83,11 +92,12 @@ export async function enrichAndStore(name: string) {
     },
   });
 
-  return { alreadyExists: false, data: profile };
+  return { alreadyExists: false, data: formatProfile(profile) };
 }
 
 export async function findById(id: string) {
-  return db.profile.findUnique({ where: { id } });
+  const profile = await db.profile.findUnique({ where: { id } });
+  return profile ? formatProfile(profile) : null;
 }
 
 export async function findAll(filters: {
@@ -116,7 +126,8 @@ export async function findAll(filters: {
     };
   }
 
-  return db.profile.findMany({ where });
+  const profiles = await db.profile.findMany({ where });
+  return profiles.map(formatProfile);
 }
 
 export async function removeById(id: string) {
