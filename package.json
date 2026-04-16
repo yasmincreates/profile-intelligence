@@ -24,6 +24,9 @@
     "uuid": "^13.0.0",
     "ws": "^8.20.0"
   },
+  "overrides": {
+    "@types/pg": "8.6.6"
+  },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.6.0",
