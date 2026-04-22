@@ -1,6 +1,7 @@
 import axios from "axios";
 import { randomBytes } from "crypto";
 import db from "./db";
+import { COUNTRY_NAMES } from "./countries";
 
 function uuidv7(): string {
   const now = Date.now();
@@ -34,7 +35,6 @@ function formatProfile(profile: any) {
 }
 
 export async function enrichAndStore(name: string) {
-  // Check if profile already exists
   const existing = await db.profile.findUnique({
     where: { name: name.toLowerCase() },
   });
@@ -42,41 +42,24 @@ export async function enrichAndStore(name: string) {
     return { alreadyExists: true, data: formatProfile(existing) };
   }
 
-  // Call all 3 APIs in parallel
   const [genderRes, agifyRes, nationalizeRes] = await Promise.allSettled([
     axios.get(`https://api.genderize.io?name=${encodeURIComponent(name)}`),
     axios.get(`https://api.agify.io?name=${encodeURIComponent(name)}`),
     axios.get(`https://api.nationalize.io?name=${encodeURIComponent(name)}`),
   ]);
 
-  // Handle Genderize
-  if (genderRes.status === "rejected") {
-    throw { code: 502, api: "Genderize" };
-  }
+  if (genderRes.status === "rejected") throw { code: 502, api: "Genderize" };
   const genderData = genderRes.value.data;
-  if (!genderData.gender || genderData.count === 0) {
-    throw { code: 502, api: "Genderize" };
-  }
+  if (!genderData.gender || genderData.count === 0) throw { code: 502, api: "Genderize" };
 
-  // Handle Agify
-  if (agifyRes.status === "rejected") {
-    throw { code: 502, api: "Agify" };
-  }
+  if (agifyRes.status === "rejected") throw { code: 502, api: "Agify" };
   const agifyData = agifyRes.value.data;
-  if (agifyData.age == null) {
-    throw { code: 502, api: "Agify" };
-  }
+  if (agifyData.age == null) throw { code: 502, api: "Agify" };
 
-  // Handle Nationalize
-  if (nationalizeRes.status === "rejected") {
-    throw { code: 502, api: "Nationalize" };
-  }
+  if (nationalizeRes.status === "rejected") throw { code: 502, api: "Nationalize" };
   const nationalizeData = nationalizeRes.value.data;
-  if (!nationalizeData.country || nationalizeData.country.length === 0) {
-    throw { code: 502, api: "Nationalize" };
-  }
+  if (!nationalizeData.country || nationalizeData.country.length === 0) throw { code: 502, api: "Nationalize" };
 
-  // Process data
   const gender: string = genderData.gender;
   const gender_probability: number = genderData.probability;
   const sample_size: number = genderData.count;
@@ -84,15 +67,14 @@ export async function enrichAndStore(name: string) {
   const age: number = agifyData.age;
   const age_group: string = getAgeGroup(age);
 
-  // Pick country with highest probability
   const topCountry = nationalizeData.country.reduce(
     (best: any, current: any) =>
       current.probability > best.probability ? current : best,
   );
   const country_id: string = topCountry.country_id;
   const country_probability: number = topCountry.probability;
+  const country_name: string = COUNTRY_NAMES[country_id] ?? country_id;
 
-  // Store in database
   const profile = await db.profile.create({
     data: {
       id: uuidv7(),
@@ -103,6 +85,7 @@ export async function enrichAndStore(name: string) {
       age,
       age_group,
       country_id,
+      country_name,
       country_probability,
     },
   });
@@ -119,30 +102,57 @@ export async function findAll(filters: {
   gender?: string;
   country_id?: string;
   age_group?: string;
+  min_age?: number;
+  max_age?: number;
+  min_gender_probability?: number;
+  min_country_probability?: number;
+  sort_by?: "age" | "created_at" | "gender_probability";
+  order?: "asc" | "desc";
+  page?: number;
+  limit?: number;
 }) {
   const where: any = {};
 
   if (filters.gender) {
-    where.gender = {
-      equals: filters.gender.toLowerCase(),
-      mode: "insensitive",
-    };
+    where.gender = { equals: filters.gender.toLowerCase(), mode: "insensitive" };
   }
   if (filters.country_id) {
-    where.country_id = {
-      equals: filters.country_id.toUpperCase(),
-      mode: "insensitive",
-    };
+    where.country_id = { equals: filters.country_id.toUpperCase(), mode: "insensitive" };
   }
   if (filters.age_group) {
-    where.age_group = {
-      equals: filters.age_group.toLowerCase(),
-      mode: "insensitive",
-    };
+    where.age_group = { equals: filters.age_group.toLowerCase(), mode: "insensitive" };
+  }
+  if (filters.min_age !== undefined || filters.max_age !== undefined) {
+    where.age = {};
+    if (filters.min_age !== undefined) where.age.gte = filters.min_age;
+    if (filters.max_age !== undefined) where.age.lte = filters.max_age;
+  }
+  if (filters.min_gender_probability !== undefined) {
+    where.gender_probability = { gte: filters.min_gender_probability };
+  }
+  if (filters.min_country_probability !== undefined) {
+    where.country_probability = { gte: filters.min_country_probability };
   }
 
-  const profiles = await db.profile.findMany({ where });
-  return profiles.map(formatProfile);
+  const page = Math.max(1, filters.page ?? 1);
+  const limit = Math.min(50, Math.max(1, filters.limit ?? 10));
+  const skip = (page - 1) * limit;
+
+  const sortField = filters.sort_by ?? "created_at";
+  const sortOrder = filters.order ?? "asc";
+  const orderBy = { [sortField]: sortOrder };
+
+  const [profiles, total] = await Promise.all([
+    db.profile.findMany({ where, orderBy, skip, take: limit }),
+    db.profile.count({ where }),
+  ]);
+
+  return {
+    data: profiles.map(formatProfile),
+    total,
+    page,
+    limit,
+  };
 }
 
 export async function removeById(id: string) {
