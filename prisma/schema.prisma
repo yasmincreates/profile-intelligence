@@ -19,3 +19,25 @@ model Profile {
   country_probability Float
   created_at          DateTime @default(now())
 }
+
+model User {
+  id             String         @id
+  github_id      String         @unique
+  username       String
+  email          String
+  avatar_url     String
+  role           String         @default("analyst")
+  is_active      Boolean        @default(true)
+  last_login_at  DateTime?
+  created_at     DateTime       @default(now())
+  refresh_tokens RefreshToken[]
+}
+
+model RefreshToken {
+  id         String   @id
+  token      String   @unique
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  expires_at DateTime
+  created_at DateTime @default(now())
+}
