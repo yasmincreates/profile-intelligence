@@ -7,6 +7,7 @@ import {
   rotateRefreshToken,
   invalidateRefreshToken,
 } from "./auth.service";
+import db from "./db";
 
 // In-memory state store: state → { redirect_uri, expires }
 const pendingStates = new Map<string, { redirect_uri: string; expires: number }>();
@@ -139,4 +140,41 @@ export async function logout(req: Request, res: Response) {
 
 export async function whoami(req: Request, res: Response) {
   return res.status(200).json({ status: "success", data: req.user });
+}
+
+export async function testToken(req: Request, res: Response) {
+  if (!process.env.ALLOW_TEST_LOGIN) {
+    return res.status(404).json({ status: "error", message: "Not found" });
+  }
+
+  const role = (req.body?.role as string) ?? "analyst";
+  if (!["admin", "analyst"].includes(role)) {
+    return res.status(400).json({ status: "error", message: "Role must be 'admin' or 'analyst'" });
+  }
+
+  try {
+    const user = await db.user.upsert({
+      where: { github_id: `test-${role}` },
+      update: { role, last_login_at: new Date() },
+      create: {
+        id: `test-${role}-user`,
+        github_id: `test-${role}`,
+        username: `test_${role}`,
+        email: `test_${role}@insighta.test`,
+        avatar_url: "",
+        role,
+        is_active: true,
+        last_login_at: new Date(),
+      },
+    });
+
+    const tokens = await issueTokens(user);
+    return res.status(200).json({
+      status: "success",
+      ...tokens,
+      user: { id: user.id, username: user.username, role: user.role },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ status: "error", message: err.message });
+  }
 }

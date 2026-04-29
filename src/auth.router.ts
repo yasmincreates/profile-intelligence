@@ -6,6 +6,7 @@ import {
   refreshToken,
   logout,
   whoami,
+  testToken,
 } from "./auth.controller";
 
 const router = Router();
@@ -15,5 +16,6 @@ router.get("/github/callback", handleCallback);
 router.post("/refresh", refreshToken);
 router.post("/logout", logout);
 router.get("/me", authenticate, whoami);
+router.post("/test-token", testToken);
 
 export default router;

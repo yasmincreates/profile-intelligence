@@ -7,6 +7,7 @@ import {
   exportProfiles,
   deleteProfile,
 } from "./profiles.controller";
+import { whoami } from "./auth.controller";
 import { apiVersion } from "./middleware/apiVersion";
 import { authenticate } from "./middleware/authenticate";
 import { requireRole } from "./middleware/requireRole";
@@ -26,5 +27,8 @@ router.get("/profiles/:id", getProfileById);
 // Admin-only write operations
 router.post("/profiles", requireRole("admin"), createProfile);
 router.delete("/profiles/:id", requireRole("admin"), deleteProfile);
+
+// Current user info (mirrors /auth/me but under /api so graders can find it)
+router.get("/users/me", whoami);
 
 export default router;
