@@ -54,30 +54,74 @@ export async function getProfileById(req: Request, res: Response) {
   }
 }
 
-export async function getAllProfiles(req: Request, res: Response) {
+function buildPaginatedResponse(
+  req: Request,
+  result: { data: any[]; total: number; page: number; limit: number },
+  extraParams: Record<string, string> = {}
+) {
+  const { data, total, page, limit } = result;
+  const total_pages = Math.ceil(total / limit);
+
+  const base = req.path;
+  const buildLink = (p: number) => {
+    const params = new URLSearchParams({ ...extraParams, page: String(p), limit: String(limit) });
+    return `${base}?${params.toString()}`;
+  };
+
+  return {
+    status: "success",
+    page,
+    limit,
+    total,
+    total_pages,
+    links: {
+      self: buildLink(page),
+      next: page < total_pages ? buildLink(page + 1) : null,
+      prev: page > 1 ? buildLink(page - 1) : null,
+    },
+    data,
+  };
+}
+
+function parseListParams(query: Record<string, string | undefined>) {
   const {
+    gender, country_id, age_group, min_age, max_age,
+    min_gender_probability, min_country_probability,
+    sort_by, order, page, limit,
+  } = query;
+
+  return {
     gender,
     country_id,
     age_group,
-    min_age,
-    max_age,
-    min_gender_probability,
-    min_country_probability,
-    sort_by,
-    order,
-    page,
-    limit,
-  } = req.query as Record<string, string | undefined>;
+    min_age: min_age !== undefined ? Number(min_age) : undefined,
+    max_age: max_age !== undefined ? Number(max_age) : undefined,
+    min_gender_probability: min_gender_probability !== undefined ? Number(min_gender_probability) : undefined,
+    min_country_probability: min_country_probability !== undefined ? Number(min_country_probability) : undefined,
+    sort_by: sort_by as any,
+    order: order as any,
+    page: page !== undefined ? Number(page) : undefined,
+    limit: limit !== undefined ? Number(limit) : undefined,
+  };
+}
 
-  // Validate numeric params
-  const numericFields = { min_age, max_age, min_gender_probability, min_country_probability, page, limit };
-  for (const [key, val] of Object.entries(numericFields)) {
+function validateNumericParams(params: Record<string, string | undefined>): string | null {
+  const numericFields = ["min_age", "max_age", "min_gender_probability", "min_country_probability", "page", "limit"];
+  for (const key of numericFields) {
+    const val = params[key];
     if (val !== undefined && (isNaN(Number(val)) || val.trim() === "")) {
-      return res.status(422).json({ status: "error", message: `${key} must be a number` });
+      return `${key} must be a number`;
     }
   }
+  return null;
+}
 
-  // Validate sort_by and order
+export async function getAllProfiles(req: Request, res: Response) {
+  const query = req.query as Record<string, string | undefined>;
+  const validationError = validateNumericParams(query);
+  if (validationError) return res.status(422).json({ status: "error", message: validationError });
+
+  const { sort_by, order } = query;
   const validSortFields = ["age", "created_at", "gender_probability"];
   if (sort_by && !validSortFields.includes(sort_by)) {
     return res.status(422).json({ status: "error", message: "sort_by must be one of: age, created_at, gender_probability" });
@@ -87,27 +131,12 @@ export async function getAllProfiles(req: Request, res: Response) {
   }
 
   try {
-    const result = await findAll({
-      gender,
-      country_id,
-      age_group,
-      min_age: min_age !== undefined ? Number(min_age) : undefined,
-      max_age: max_age !== undefined ? Number(max_age) : undefined,
-      min_gender_probability: min_gender_probability !== undefined ? Number(min_gender_probability) : undefined,
-      min_country_probability: min_country_probability !== undefined ? Number(min_country_probability) : undefined,
-      sort_by: sort_by as any,
-      order: order as any,
-      page: page !== undefined ? Number(page) : undefined,
-      limit: limit !== undefined ? Number(limit) : undefined,
-    });
-
-    return res.status(200).json({
-      status: "success",
-      page: result.page,
-      limit: result.limit,
-      total: result.total,
-      data: result.data,
-    });
+    const result = await findAll(parseListParams(query));
+    const extraParams: Record<string, string> = {};
+    for (const [k, v] of Object.entries(query)) {
+      if (v && k !== "page" && k !== "limit") extraParams[k] = v;
+    }
+    return res.status(200).json(buildPaginatedResponse(req, result, extraParams));
   } catch {
     return res.status(500).json({ status: "error", message: "Internal server error" });
   }
@@ -125,7 +154,6 @@ export async function searchProfiles(req: Request, res: Response) {
     return res.status(400).json({ status: "error", message: "Unable to interpret query" });
   }
 
-  // Validate pagination
   for (const [key, val] of Object.entries({ page, limit })) {
     if (val !== undefined && (isNaN(Number(val)) || val.trim() === "")) {
       return res.status(422).json({ status: "error", message: `${key} must be a number` });
@@ -138,14 +166,37 @@ export async function searchProfiles(req: Request, res: Response) {
       page: page !== undefined ? Number(page) : undefined,
       limit: limit !== undefined ? Number(limit) : undefined,
     });
+    return res.status(200).json(buildPaginatedResponse(req, result, { q: q! }));
+  } catch {
+    return res.status(500).json({ status: "error", message: "Internal server error" });
+  }
+}
 
-    return res.status(200).json({
-      status: "success",
-      page: result.page,
-      limit: result.limit,
-      total: result.total,
-      data: result.data,
-    });
+export async function exportProfiles(req: Request, res: Response) {
+  const query = req.query as Record<string, string | undefined>;
+
+  try {
+    const result = await findAll({ ...parseListParams(query), limit: 10000, page: 1 });
+
+    const COLS = [
+      "id", "name", "gender", "gender_probability", "age", "age_group",
+      "country_id", "country_name", "country_probability", "created_at",
+    ];
+
+    const escape = (v: any) => {
+      const s = v === null || v === undefined ? "" : String(v);
+      return s.includes(",") || s.includes('"') || s.includes("\n")
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+
+    const rows = result.data.map((p) => COLS.map((c) => escape(p[c])).join(","));
+    const csv = [COLS.join(","), ...rows].join("\n");
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="profiles_${timestamp}.csv"`);
+    return res.status(200).send(csv);
   } catch {
     return res.status(500).json({ status: "error", message: "Internal server error" });
   }
