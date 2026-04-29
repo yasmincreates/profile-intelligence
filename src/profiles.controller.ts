@@ -62,7 +62,7 @@ function buildPaginatedResponse(
   const { data, total, page, limit } = result;
   const total_pages = Math.ceil(total / limit);
 
-  const base = req.path;
+  const base = req.baseUrl + req.path;
   const buildLink = (p: number) => {
     const params = new URLSearchParams({ ...extraParams, page: String(p), limit: String(limit) });
     return `${base}?${params.toString()}`;
