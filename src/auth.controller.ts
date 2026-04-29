@@ -1,4 +1,6 @@
 import { Request, Response } from "express";
+import { createHash } from "crypto";
+import jwt from "jsonwebtoken";
 import {
   exchangeGitHubCode,
   getGitHubUser,
@@ -9,26 +11,20 @@ import {
 } from "./auth.service";
 import db from "./db";
 
-// In-memory state store: state → { redirect_uri, expires }
-const pendingStates = new Map<string, { redirect_uri: string; expires: number }>();
+// State is a signed JWT — stateless, works across serverless instances
+function signState(redirect_uri: string, code_challenge: string): string {
+  return jwt.sign({ redirect_uri, code_challenge }, process.env.JWT_SECRET!, { expiresIn: "10m" });
+}
 
-function cleanStates() {
-  const now = Date.now();
-  for (const [key, val] of pendingStates.entries()) {
-    if (val.expires < now) pendingStates.delete(key);
-  }
+function verifyState(state: string): { redirect_uri: string; code_challenge: string } {
+  return jwt.verify(state, process.env.JWT_SECRET!) as any;
 }
 
 export async function initiateOAuth(req: Request, res: Response) {
-  cleanStates();
-
   const redirect_uri = (req.query.redirect_uri as string) ?? "";
-  const state = require("crypto").randomBytes(16).toString("hex");
+  const code_challenge = (req.query.code_challenge as string) ?? "";
 
-  pendingStates.set(state, {
-    redirect_uri,
-    expires: Date.now() + 10 * 60 * 1000,
-  });
+  const state = signState(redirect_uri, code_challenge);
 
   const callbackUrl = `${req.protocol}://${req.get("host")}/auth/github/callback`;
 
@@ -42,7 +38,7 @@ export async function initiateOAuth(req: Request, res: Response) {
 }
 
 export async function handleCallback(req: Request, res: Response) {
-  const { code, state, error } = req.query as Record<string, string>;
+  const { code, state, error, code_verifier } = req.query as Record<string, string>;
 
   if (error) {
     return res.status(400).json({ status: "error", message: `GitHub OAuth error: ${error}` });
@@ -51,11 +47,21 @@ export async function handleCallback(req: Request, res: Response) {
     return res.status(400).json({ status: "error", message: "Missing code or state" });
   }
 
-  const pending = pendingStates.get(state);
-  if (!pending || pending.expires < Date.now()) {
+  // Verify state JWT — stateless, no Map lookup needed
+  let pending: { redirect_uri: string; code_challenge: string };
+  try {
+    pending = verifyState(state);
+  } catch {
     return res.status(400).json({ status: "error", message: "Invalid or expired state" });
   }
-  pendingStates.delete(state);
+
+  // PKCE verification — only when both challenge and verifier are present
+  if (pending.code_challenge && code_verifier) {
+    const expected = createHash("sha256").update(code_verifier).digest("base64url");
+    if (expected !== pending.code_challenge) {
+      return res.status(400).json({ status: "error", message: "Invalid code verifier" });
+    }
+  }
 
   // Grader test_code flow: skip GitHub OAuth, return admin tokens as JSON
   if (code === "test_code") {
